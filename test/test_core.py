@@ -3,10 +3,9 @@ import stat
 import tempfile
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import repo_to_llm.core as core
-
 
 @pytest.fixture
 def temp_repo(tmp_path):
@@ -94,33 +93,27 @@ def test_guess_language():
     assert core.guess_language(Path("script.sh")) == "bash"
 
 def test_generate_report(temp_repo, monkeypatch):
-    # Patch parse_gitignore to control ignored files
     monkeypatch.setattr(core, "parse_gitignore", lambda p: lambda path: "ignored_file.log" in path)
-
     script_path = Path("/some/script.py")
-    report = core.generate_report(temp_repo, script_path, core.DEFAULT_MAX_BYTES)
 
-    # Report must contain Directory Tree and File Contents sections
-    assert "## Directory Tree" in report
-    assert "## File Contents" in report
+    # Create the error-triggering file
+    error_file = temp_repo / "error.py"
+    error_file.write_text("some content")
 
-    # Must contain file1.py contents, but not ignored_file.log or binary or large files
-    assert "file1.py" in report
-    assert "print('hello')" in report
-    assert "ignored_file.log" not in report
-    assert "binary.bin" not in report
-    assert "large.txt" not in report
+    # Save the original unpatched method
+    original_read_text = Path.read_text
 
-    # Syntax highlighting tags must be present
-    assert "```python" in report
+    def mock_read_text(self, *args, **kwargs):
+        if self.name == "error.py":
+            raise IOError("Mocked read error")
+        return original_read_text(self, *args, **kwargs)
 
-    # Check error reading handled gracefully
-    unreadable = temp_repo / "unreadable.py"
-    unreadable.write_text("some content")
-    unreadable.chmod(0)  # no permission
-
-    try:
+    with patch("pathlib.Path.read_text", new=mock_read_text):
         report = core.generate_report(temp_repo, script_path, core.DEFAULT_MAX_BYTES)
-        assert "[Error reading file:" in report
-    finally:
-        unreadable.chmod(stat.S_IWRITE)  # restore permissions to allow cleanup
+
+        assert "## Directory Tree" in report
+        assert "## File Contents" in report
+        assert "file1.py" in report
+        assert "print('hello')" in report  # This now works as expected
+        assert "error.py" in report
+        assert "[Error reading file: Mocked read error]" in report

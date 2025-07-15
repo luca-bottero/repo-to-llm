@@ -1,18 +1,17 @@
 import os
 import fnmatch
 from pathlib import Path
-import mimetypes
 import logging
 from gitignore_parser import parse_gitignore
 
+DEFAULT_MAX_BYTES = 500_000
 EXCLUDED_PATTERNS = [
     ".git/*",
     ".*",
     "*.log",
     "*.log.*",
-    "*repo-to-llm.md",
+    "*.ipynb",
 ]
-DEFAULT_MAX_BYTES = 500_000  # ~500 KB per file
 
 logger = logging.getLogger("repo-to-llm")
 
@@ -28,7 +27,7 @@ def is_text_file(path: Path, blocksize: int = 512) -> bool:
         return False
 
 
-def should_exclude(path: Path, input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int) -> bool:
+def should_exclude(path: Path, input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_extensions: set | None = None) -> bool:
     if path.resolve() == script_path.resolve():
         return True
 
@@ -41,6 +40,11 @@ def should_exclude(path: Path, input_dir: Path, ignore_matcher, script_path: Pat
         if fnmatch.fnmatch(relative_str, pattern):
             return True
 
+    if exclude_extensions:
+        if path.suffix.lower() in exclude_extensions:
+            logger.debug(f"Excluding {path} due to extension in exclude list")
+            return True
+
     if path.stat().st_size > max_bytes:
         logger.debug(f"Skipping {path} due to size > {max_bytes} bytes")
         return True
@@ -51,45 +55,56 @@ def should_exclude(path: Path, input_dir: Path, ignore_matcher, script_path: Pat
 
     return False
 
-def collect_files(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int) -> list:
+
+def collect_files(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_extensions: set | None = None) -> list:
     files = []
     for path in input_dir.rglob('*'):
         try:
-            if path.is_file() and not should_exclude(path, input_dir, ignore_matcher, script_path, max_bytes):
+            if path.is_file() and not should_exclude(path, input_dir, ignore_matcher, script_path, max_bytes, exclude_extensions):
                 files.append(path)
         except Exception as e:
             logger.warning(f"Error processing {path}: {e}")
     return files
 
-def generate_tree(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int) -> str:
+def generate_tree(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_extensions: set | None = None) -> str:
     output = []
 
-    for root, dirs, files in os.walk(input_dir):
-        root_path = Path(root)
+    def walk_dir(path: Path, prefix: str = '', is_last: bool = True):
+        # Print the directory name
+        connector = '└── ' if is_last else '├── '
+        if prefix == '':
+            output.append(f"{path.name}/")
+        else:
+            output.append(f"{prefix}{connector}{path.name}/")
 
-        dirs[:] = [
-            d for d in dirs
-            if not d.startswith('.') and not ignore_matcher(str(root_path / d))
-        ]
+        # List and filter directories
+        try:
+            entries = [e for e in path.iterdir() if not e.name.startswith('.') and not ignore_matcher(str(e))]
+        except Exception as e:
+            # Can't list directory contents
+            output.append(f"{prefix}    [Error reading directory: {e}]")
+            return
 
-        relative_root = root_path.relative_to(input_dir)
-        indent = '    ' * len(relative_root.parts)
-        output.append(f"{indent}{root_path.name}/")
+        dirs = sorted([e for e in entries if e.is_dir()])
+        files = sorted([e for e in entries if e.is_file() and not should_exclude(e, input_dir, ignore_matcher, script_path, max_bytes, exclude_extensions)])
 
-        filtered_files = []
-        for f in sorted(files):
-            full_path = root_path / f
-            try:
-                if not should_exclude(full_path, input_dir, ignore_matcher, Path(__file__), DEFAULT_MAX_BYTES):
-                    filtered_files.append(f)
-            except Exception as e:
-                logger.warning(f"Error processing {full_path}: {e}")
+        total_entries = len(dirs) + len(files)
 
-        for file in filtered_files:
-            output.append(f"{indent}    {file}")
+        for i, d in enumerate(dirs):
+            last = (i == total_entries - 1) if len(files) == 0 else False
+            # For prefix, add '│   ' if not last directory, else '    '
+            new_prefix = prefix + ('    ' if is_last else '│   ')
+            walk_dir(d, new_prefix, last)
+
+        for i, f in enumerate(files):
+            last = (i == len(files) - 1)
+            connector = '└── ' if last else '├── '
+            new_prefix = prefix + ('    ' if is_last else '│   ')
+            output.append(f"{new_prefix}{connector}{f.name}")
+
+    walk_dir(input_dir)
 
     return '\n'.join(output)
-
 
 
 def guess_language(path: Path) -> str:
@@ -112,18 +127,26 @@ def guess_language(path: Path) -> str:
     }
     return mapping.get(ext, 'text')
 
-def generate_report(input_dir: Path, script_path: Path, max_bytes: int) -> str:
+def generate_report(
+    input_dir: Path,
+    script_path: Path,
+    max_bytes: int,
+    exclude_tree: bool = False,
+    exclude_extensions: set | None = None
+) -> str:
     gitignore_path = input_dir / '.gitignore'
     ignore_matcher = parse_gitignore(gitignore_path) if gitignore_path.exists() else lambda path: False
 
     output = []
-    output.append("## Directory Tree\n")
-    output.append("```")
-    output.append(generate_tree(input_dir, ignore_matcher, script_path, max_bytes))
-    output.append("```\n\n")
+
+    if not exclude_tree:
+        output.append("## Directory Tree\n")
+        output.append("```")
+        output.append(generate_tree(input_dir, ignore_matcher, script_path, max_bytes, exclude_extensions))
+        output.append("```\n\n")
 
     output.append("## File Contents\n")
-    files = collect_files(input_dir, ignore_matcher, script_path, max_bytes)
+    files = collect_files(input_dir, ignore_matcher, script_path, max_bytes, exclude_extensions)
 
     for file in sorted(files):
         rel_path = file.relative_to(input_dir)
