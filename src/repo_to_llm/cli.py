@@ -4,8 +4,9 @@ from pathlib import Path
 import logging
 import re
 
-from repo_to_llm.core import generate_report, DEFAULT_MAX_BYTES
+from repo_to_llm.core import generate_report
 from repo_to_llm.utils import parse_size
+from repo_to_llm.config import config
 
 logger = logging.getLogger("repo-to-llm")
 
@@ -14,7 +15,7 @@ def main():
     parser.add_argument('input_dir', type=Path, help="Input directory")
     parser.add_argument('--output', type=Path, help="Output file (if omitted, prints to stdout)")
     parser.add_argument('--print', action='store_true', help="Print to stdout (default behavior)")
-    parser.add_argument('--max-bytes', type=parse_size, default=DEFAULT_MAX_BYTES, 
+    parser.add_argument('--max-bytes', type=parse_size, default=config.max_bytes, 
                         help="Maximum file size to include (e.g. 300kb, 1mb). Default is 500000 bytes.")
     parser.add_argument('--verbose', action='store_true', help="Enable debug output")
     parser.add_argument('--exclude-tree', action='store_true', help="Exclude directory tree structure from report")

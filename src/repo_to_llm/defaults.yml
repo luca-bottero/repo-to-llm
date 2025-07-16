@@ -1,0 +1,25 @@
+max_bytes: 1_000_000
+
+extension_mapping:
+  .py: python
+  .js: javascript
+  .ts: typescript
+  .java: java
+  .cpp: cpp
+  .c: c
+  .html: html
+  .css: css
+  .json: json
+  .md: markdown
+  .sh: bash
+  .yml: yaml
+  .yaml: yaml
+  .txt: text
+  .jinja: jinja
+
+excluded_patterns:
+  - ".git/*"
+  - ".*"
+  - "*.log"
+  - "*.log.*"
+  - "*.ipynb"
