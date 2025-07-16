@@ -1,6 +1,5 @@
 import yaml
 from pathlib import Path
-from collections import ChainMap
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "defaults.yml"
 USER_CONFIG_PATH = Path.home() / ".repo_to_llm" / "config.yml"
