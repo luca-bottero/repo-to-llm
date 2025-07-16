@@ -19,8 +19,12 @@ def main():
                         help="Maximum file size to include (e.g. 300kb, 1mb). Default is 500000 bytes.")
     parser.add_argument('--verbose', action='store_true', help="Enable debug output")
     parser.add_argument('--exclude-tree', action='store_true', help="Exclude directory tree structure from report")
-    parser.add_argument('--exclude-extensions', type=str,
-                        help="Comma-separated list of file extensions to exclude, e.g. '.py, .js'")
+    parser.add_argument(
+        "--exclude-patterns",
+        type=str,
+        nargs="*",
+        help="Space-separated glob patterns to exclude files or directories, e.g. --exclude-patterns '*.py' 'test/*'"
+    )
 
     args = parser.parse_args()
 
@@ -33,17 +37,15 @@ def main():
         logger.error(f"{args.input_dir} is not a directory")
         sys.exit(1)
 
-    exclude_exts = None
-    if args.exclude_extensions:
-        exclude_exts = {ext.strip().lower() for ext in args.exclude_extensions.split(',') if ext.strip()}
-        logger.debug(f"Excluding extensions: {exclude_exts}")
+    exclude_patterns = args.exclude_patterns if args.exclude_patterns else []
+    logger.debug(f"Excluding patterns: {exclude_patterns}")
 
     report = generate_report(
         args.input_dir,
         Path(__file__).resolve(),
         max_bytes=args.max_bytes,
         exclude_tree=args.exclude_tree,
-        exclude_extensions=exclude_exts
+        exclude_patterns=exclude_patterns
     )
 
     if args.output:

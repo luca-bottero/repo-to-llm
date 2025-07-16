@@ -27,7 +27,7 @@ def is_text_file(path: Path, blocksize: int = 512) -> bool:
         return False
 
 
-def should_exclude(path: Path, input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_extensions: set | None = None) -> bool:
+def should_exclude(path: Path, input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_patterns: set | None = None) -> bool:
     if path.resolve() == script_path.resolve():
         return True
 
@@ -40,10 +40,12 @@ def should_exclude(path: Path, input_dir: Path, ignore_matcher, script_path: Pat
         if fnmatch.fnmatch(relative_str, pattern):
             return True
 
-    if exclude_extensions:
-        if path.suffix.lower() in exclude_extensions:
-            logger.debug(f"Excluding {path} due to extension in exclude list")
-            return True
+    if exclude_patterns:
+        relative_str = str(path.relative_to(input_dir))
+        for pattern in exclude_patterns:
+            if fnmatch.fnmatch(relative_str, pattern):
+                logger.debug(f"Excluding {relative_str} due to user pattern: {pattern}")
+                return True
 
     if path.stat().st_size > max_bytes:
         logger.debug(f"Skipping {path} due to size > {max_bytes} bytes")
@@ -56,17 +58,17 @@ def should_exclude(path: Path, input_dir: Path, ignore_matcher, script_path: Pat
     return False
 
 
-def collect_files(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_extensions: set | None = None) -> list:
+def collect_files(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_patterns: set | None = None) -> list:
     files = []
     for path in input_dir.rglob('*'):
         try:
-            if path.is_file() and not should_exclude(path, input_dir, ignore_matcher, script_path, max_bytes, exclude_extensions):
+            if path.is_file() and not should_exclude(path, input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns):
                 files.append(path)
         except Exception as e:
             logger.warning(f"Error processing {path}: {e}")
     return files
 
-def generate_tree(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_extensions: set | None = None) -> str:
+def generate_tree(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_patterns: set | None = None) -> str:
     output = []
 
     def walk_dir(path: Path, prefix: str = '', is_last: bool = True):
@@ -86,7 +88,7 @@ def generate_tree(input_dir: Path, ignore_matcher, script_path: Path, max_bytes:
             return
 
         dirs = sorted([e for e in entries if e.is_dir()])
-        files = sorted([e for e in entries if e.is_file() and not should_exclude(e, input_dir, ignore_matcher, script_path, max_bytes, exclude_extensions)])
+        files = sorted([e for e in entries if e.is_file() and not should_exclude(e, input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns)])
 
         total_entries = len(dirs) + len(files)
 
@@ -132,7 +134,7 @@ def generate_report(
     script_path: Path,
     max_bytes: int,
     exclude_tree: bool = False,
-    exclude_extensions: set | None = None
+    exclude_patterns: set | None = None
 ) -> str:
     gitignore_path = input_dir / '.gitignore'
     ignore_matcher = parse_gitignore(gitignore_path) if gitignore_path.exists() else lambda path: False
@@ -142,11 +144,11 @@ def generate_report(
     if not exclude_tree:
         output.append("## Directory Tree\n")
         output.append("```")
-        output.append(generate_tree(input_dir, ignore_matcher, script_path, max_bytes, exclude_extensions))
+        output.append(generate_tree(input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns))
         output.append("```\n\n")
 
     output.append("## File Contents\n")
-    files = collect_files(input_dir, ignore_matcher, script_path, max_bytes, exclude_extensions)
+    files = collect_files(input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns)
 
     for file in sorted(files):
         rel_path = file.relative_to(input_dir)
