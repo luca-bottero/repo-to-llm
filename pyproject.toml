@@ -1,12 +1,12 @@
 [project]
 name = "repo-to-llm"
-version = "0.1.0"
+version = "0.1.1"
 description = "CLI tool to convert a code repository into LLM-friendly markdown"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { file = "LICENSE" }
 authors = [{ name = "Luca Bottero", email = "lucabottero99@gmail.com" }]
-keywords = ["cli", "llm", "markdown", "codebase"]
+keywords = ["cli", "llm", "markdown", "codebase", "repo", "repository"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
