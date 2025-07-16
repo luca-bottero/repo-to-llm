@@ -22,6 +22,9 @@ dependencies = [
 "Repository" = "https://github.com/luca-bottero/repo-to-llm"
 "Bug Tracker" = "https://github.com/luca-bottero/repo-to-llm/issues"
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [project.scripts]
 repo-to-llm = "repo_to_llm.cli:main"
 

@@ -2,10 +2,11 @@
 
 ```
 /
-    ├── repo_to_llm/
-    │   ├── __init__.py
-    │   ├── core.py
-    │   └── utils.py
+    ├── src/
+    │   └── repo_to_llm/
+    │       ├── __init__.py
+    │       ├── core.py
+    │       └── utils.py
     ├── test/
     │   ├── __init__.py
     │   └── test_core.py
@@ -98,6 +99,9 @@ dependencies = [
 "Repository" = "https://github.com/luca-bottero/repo-to-llm"
 "Bug Tracker" = "https://github.com/luca-bottero/repo-to-llm/issues"
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [project.scripts]
 repo-to-llm = "repo_to_llm.cli:main"
 
@@ -106,13 +110,13 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 ```
 
-### repo_to_llm/__init__.py
+### src/repo_to_llm/__init__.py
 
 ```python
 
 ```
 
-### repo_to_llm/core.py
+### src/repo_to_llm/core.py
 
 ```python
 import os
@@ -283,7 +287,7 @@ def generate_report(
     return '\n'.join(output)
 ```
 
-### repo_to_llm/utils.py
+### src/repo_to_llm/utils.py
 
 ```python
 import argparse

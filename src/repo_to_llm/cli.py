@@ -4,9 +4,8 @@ from pathlib import Path
 import logging
 import re
 
-# Import your core functions here
-from .core import generate_report, DEFAULT_MAX_BYTES
-from .utils import parse_size
+from repo_to_llm.core import generate_report, DEFAULT_MAX_BYTES
+from repo_to_llm.utils import parse_size
 
 logger = logging.getLogger("repo-to-llm")
 
