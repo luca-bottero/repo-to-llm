@@ -1,0 +1,1856 @@
+## Directory Tree
+
+```
+/
+    ├── repo_to_llm/
+    ├── src/
+    │   └── repo_to_llm/
+    │       ├── __init__.py
+    │       ├── cli.py
+    │       ├── config.py
+    │       ├── core.py
+    │       ├── defaults.yml
+    │       ├── pattern_matching.py
+    │       └── utils.py
+    ├── test/
+    │   ├── __init__.py
+    │   └── test_core.py
+    ├── LICENSE
+    ├── README.md
+    └── pyproject.toml
+```
+
+
+## File Contents
+
+### .git/COMMIT_EDITMSG
+
+```text
+slight refactoring of the code and small bugs fix
+```
+
+### .git/FETCH_HEAD
+
+```text
+48ac58224f136a227a8fca16bb10991793c9b659		branch 'main' of github.com:luca-bottero/repo-to-llm
+9788209b7d6a6bef940ac18669a2e2e16ee229c1	not-for-merge	branch 'custom-filtering' of github.com:luca-bottero/repo-to-llm
+```
+
+### .git/HEAD
+
+```text
+ref: refs/heads/main
+```
+
+### .git/ORIG_HEAD
+
+```text
+48ac58224f136a227a8fca16bb10991793c9b659
+```
+
+### .git/config
+
+```text
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+[remote "origin"]
+	url = git@github.com:luca-bottero/repo-to-llm.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[branch "main"]
+	remote = origin
+	merge = refs/heads/main
+	vscode-merge-base = origin/main
+```
+
+### .git/description
+
+```text
+Unnamed repository; edit this file 'description' to name the repository.
+```
+
+### .git/hooks/applypatch-msg.sample
+
+```text
+#!/bin/sh
+#
+# An example hook script to check the commit log message taken by
+# applypatch from an e-mail message.
+#
+# The hook should exit with non-zero status after issuing an
+# appropriate message if it wants to stop the commit.  The hook is
+# allowed to edit the commit message file.
+#
+# To enable this hook, rename this file to "applypatch-msg".
+
+. git-sh-setup
+commitmsg="$(git rev-parse --git-path hooks/commit-msg)"
+test -x "$commitmsg" && exec "$commitmsg" ${1+"$@"}
+:
+```
+
+### .git/hooks/commit-msg.sample
+
+```text
+#!/bin/sh
+#
+# An example hook script to check the commit log message.
+# Called by "git commit" with one argument, the name of the file
+# that has the commit message.  The hook should exit with non-zero
+# status after issuing an appropriate message if it wants to stop the
+# commit.  The hook is allowed to edit the commit message file.
+#
+# To enable this hook, rename this file to "commit-msg".
+
+# Uncomment the below to add a Signed-off-by line to the message.
+# Doing this in a hook is a bad idea in general, but the prepare-commit-msg
+# hook is more suited to it.
+#
+# SOB=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
+# grep -qs "^$SOB" "$1" || echo "$SOB" >> "$1"
+
+# This example catches duplicate Signed-off-by lines.
+
+test "" = "$(grep '^Signed-off-by: ' "$1" |
+	 sort | uniq -c | sed -e '/^[ 	]*1[ 	]/d')" || {
+	echo >&2 Duplicate Signed-off-by lines.
+	exit 1
+}
+```
+
+### .git/hooks/fsmonitor-watchman.sample
+
+```text
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use IPC::Open2;
+
+# An example hook script to integrate Watchman
+# (https://facebook.github.io/watchman/) with git to speed up detecting
+# new and modified files.
+#
+# The hook is passed a version (currently 2) and last update token
+# formatted as a string and outputs to stdout a new update token and
+# all files that have been modified since the update token. Paths must
+# be relative to the root of the working tree and separated by a single NUL.
+#
+# To enable this hook, rename this file to "query-watchman" and set
+# 'git config core.fsmonitor .git/hooks/query-watchman'
+#
+my ($version, $last_update_token) = @ARGV;
+
+# Uncomment for debugging
+# print STDERR "$0 $version $last_update_token\n";
+
+# Check the hook interface version
+if ($version ne 2) {
+	die "Unsupported query-fsmonitor hook version '$version'.\n" .
+	    "Falling back to scanning...\n";
+}
+
+my $git_work_tree = get_working_dir();
+
+my $retry = 1;
+
+my $json_pkg;
+eval {
+	require JSON::XS;
+	$json_pkg = "JSON::XS";
+	1;
+} or do {
+	require JSON::PP;
+	$json_pkg = "JSON::PP";
+};
+
+launch_watchman();
+
+sub launch_watchman {
+	my $o = watchman_query();
+	if (is_work_tree_watched($o)) {
+		output_result($o->{clock}, @{$o->{files}});
+	}
+}
+
+sub output_result {
+	my ($clockid, @files) = @_;
+
+	# Uncomment for debugging watchman output
+	# open (my $fh, ">", ".git/watchman-output.out");
+	# binmode $fh, ":utf8";
+	# print $fh "$clockid\n@files\n";
+	# close $fh;
+
+	binmode STDOUT, ":utf8";
+	print $clockid;
+	print "\0";
+	local $, = "\0";
+	print @files;
+}
+
+sub watchman_clock {
+	my $response = qx/watchman clock "$git_work_tree"/;
+	die "Failed to get clock id on '$git_work_tree'.\n" .
+		"Falling back to scanning...\n" if $? != 0;
+
+	return $json_pkg->new->utf8->decode($response);
+}
+
+sub watchman_query {
+	my $pid = open2(\*CHLD_OUT, \*CHLD_IN, 'watchman -j --no-pretty')
+	or die "open2() failed: $!\n" .
+	"Falling back to scanning...\n";
+
+	# In the query expression below we're asking for names of files that
+	# changed since $last_update_token but not from the .git folder.
+	#
+	# To accomplish this, we're using the "since" generator to use the
+	# recency index to select candidate nodes and "fields" to limit the
+	# output to file names only. Then we're using the "expression" term to
+	# further constrain the results.
+	if (substr($last_update_token, 0, 1) eq "c") {
+		$last_update_token = "\"$last_update_token\"";
+	}
+	my $query = <<"	END";
+		["query", "$git_work_tree", {
+			"since": $last_update_token,
+			"fields": ["name"],
+			"expression": ["not", ["dirname", ".git"]]
+		}]
+	END
+
+	# Uncomment for debugging the watchman query
+	# open (my $fh, ">", ".git/watchman-query.json");
+	# print $fh $query;
+	# close $fh;
+
+	print CHLD_IN $query;
+	close CHLD_IN;
+	my $response = do {local $/; <CHLD_OUT>};
+
+	# Uncomment for debugging the watch response
+	# open ($fh, ">", ".git/watchman-response.json");
+	# print $fh $response;
+	# close $fh;
+
+	die "Watchman: command returned no output.\n" .
+	"Falling back to scanning...\n" if $response eq "";
+	die "Watchman: command returned invalid output: $response\n" .
+	"Falling back to scanning...\n" unless $response =~ /^\{/;
+
+	return $json_pkg->new->utf8->decode($response);
+}
+
+sub is_work_tree_watched {
+	my ($output) = @_;
+	my $error = $output->{error};
+	if ($retry > 0 and $error and $error =~ m/unable to resolve root .* directory (.*) is not watched/) {
+		$retry--;
+		my $response = qx/watchman watch "$git_work_tree"/;
+		die "Failed to make watchman watch '$git_work_tree'.\n" .
+		    "Falling back to scanning...\n" if $? != 0;
+		$output = $json_pkg->new->utf8->decode($response);
+		$error = $output->{error};
+		die "Watchman: $error.\n" .
+		"Falling back to scanning...\n" if $error;
+
+		# Uncomment for debugging watchman output
+		# open (my $fh, ">", ".git/watchman-output.out");
+		# close $fh;
+
+		# Watchman will always return all files on the first query so
+		# return the fast "everything is dirty" flag to git and do the
+		# Watchman query just to get it over with now so we won't pay
+		# the cost in git to look up each individual file.
+		my $o = watchman_clock();
+		$error = $output->{error};
+
+		die "Watchman: $error.\n" .
+		"Falling back to scanning...\n" if $error;
+
+		output_result($o->{clock}, ("/"));
+		$last_update_token = $o->{clock};
+
+		eval { launch_watchman() };
+		return 0;
+	}
+
+	die "Watchman: $error.\n" .
+	"Falling back to scanning...\n" if $error;
+
+	return 1;
+}
+
+sub get_working_dir {
+	my $working_dir;
+	if ($^O =~ 'msys' || $^O =~ 'cygwin') {
+		$working_dir = Win32::GetCwd();
+		$working_dir =~ tr/\\/\//;
+	} else {
+		require Cwd;
+		$working_dir = Cwd::cwd();
+	}
+
+	return $working_dir;
+}
+```
+
+### .git/hooks/post-update.sample
+
+```text
+#!/bin/sh
+#
+# An example hook script to prepare a packed repository for use over
+# dumb transports.
+#
+# To enable this hook, rename this file to "post-update".
+
+exec git update-server-info
+```
+
+### .git/hooks/pre-applypatch.sample
+
+```text
+#!/bin/sh
+#
+# An example hook script to verify what is about to be committed
+# by applypatch from an e-mail message.
+#
+# The hook should exit with non-zero status after issuing an
+# appropriate message if it wants to stop the commit.
+#
+# To enable this hook, rename this file to "pre-applypatch".
+
+. git-sh-setup
+precommit="$(git rev-parse --git-path hooks/pre-commit)"
+test -x "$precommit" && exec "$precommit" ${1+"$@"}
+:
+```
+
+### .git/hooks/pre-commit.sample
+
+```text
+#!/bin/sh
+#
+# An example hook script to verify what is about to be committed.
+# Called by "git commit" with no arguments.  The hook should
+# exit with non-zero status after issuing an appropriate message if
+# it wants to stop the commit.
+#
+# To enable this hook, rename this file to "pre-commit".
+
+if git rev-parse --verify HEAD >/dev/null 2>&1
+then
+	against=HEAD
+else
+	# Initial commit: diff against an empty tree object
+	against=$(git hash-object -t tree /dev/null)
+fi
+
+# If you want to allow non-ASCII filenames set this variable to true.
+allownonascii=$(git config --type=bool hooks.allownonascii)
+
+# Redirect output to stderr.
+exec 1>&2
+
+# Cross platform projects tend to avoid non-ASCII filenames; prevent
+# them from being added to the repository. We exploit the fact that the
+# printable range starts at the space character and ends with tilde.
+if [ "$allownonascii" != "true" ] &&
+	# Note that the use of brackets around a tr range is ok here, (it's
+	# even required, for portability to Solaris 10's /usr/bin/tr), since
+	# the square bracket bytes happen to fall in the designated range.
+	test $(git diff --cached --name-only --diff-filter=A -z $against |
+	  LC_ALL=C tr -d '[ -~]\0' | wc -c) != 0
+then
+	cat <<\EOF
+Error: Attempt to add a non-ASCII file name.
+
+This can cause problems if you want to work with people on other platforms.
+
+To be portable it is advisable to rename the file.
+
+If you know what you are doing you can disable this check using:
+
+  git config hooks.allownonascii true
+EOF
+	exit 1
+fi
+
+# If there are whitespace errors, print the offending file names and fail.
+exec git diff-index --check --cached $against --
+```
+
+### .git/hooks/pre-merge-commit.sample
+
+```text
+#!/bin/sh
+#
+# An example hook script to verify what is about to be committed.
+# Called by "git merge" with no arguments.  The hook should
+# exit with non-zero status after issuing an appropriate message to
+# stderr if it wants to stop the merge commit.
+#
+# To enable this hook, rename this file to "pre-merge-commit".
+
+. git-sh-setup
+test -x "$GIT_DIR/hooks/pre-commit" &&
+        exec "$GIT_DIR/hooks/pre-commit"
+:
+```
+
+### .git/hooks/pre-push.sample
+
+```text
+#!/bin/sh
+
+# An example hook script to verify what is about to be pushed.  Called by "git
+# push" after it has checked the remote status, but before anything has been
+# pushed.  If this script exits with a non-zero status nothing will be pushed.
+#
+# This hook is called with the following parameters:
+#
+# $1 -- Name of the remote to which the push is being done
+# $2 -- URL to which the push is being done
+#
+# If pushing without using a named remote those arguments will be equal.
+#
+# Information about the commits which are being pushed is supplied as lines to
+# the standard input in the form:
+#
+#   <local ref> <local oid> <remote ref> <remote oid>
+#
+# This sample shows how to prevent push of commits where the log message starts
+# with "WIP" (work in progress).
+
+remote="$1"
+url="$2"
+
+zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
+
+while read local_ref local_oid remote_ref remote_oid
+do
+	if test "$local_oid" = "$zero"
+	then
+		# Handle delete
+		:
+	else
+		if test "$remote_oid" = "$zero"
+		then
+			# New branch, examine all commits
+			range="$local_oid"
+		else
+			# Update to existing branch, examine new commits
+			range="$remote_oid..$local_oid"
+		fi
+
+		# Check for WIP commit
+		commit=$(git rev-list -n 1 --grep '^WIP' "$range")
+		if test -n "$commit"
+		then
+			echo >&2 "Found WIP commit in $local_ref, not pushing"
+			exit 1
+		fi
+	fi
+done
+
+exit 0
+```
+
+### .git/hooks/pre-rebase.sample
+
+```text
+#!/bin/sh
+#
+# Copyright (c) 2006, 2008 Junio C Hamano
+#
+# The "pre-rebase" hook is run just before "git rebase" starts doing
+# its job, and can prevent the command from running by exiting with
+# non-zero status.
+#
+# The hook is called with the following parameters:
+#
+# $1 -- the upstream the series was forked from.
+# $2 -- the branch being rebased (or empty when rebasing the current branch).
+#
+# This sample shows how to prevent topic branches that are already
+# merged to 'next' branch from getting rebased, because allowing it
+# would result in rebasing already published history.
+
+publish=next
+basebranch="$1"
+if test "$#" = 2
+then
+	topic="refs/heads/$2"
+else
+	topic=`git symbolic-ref HEAD` ||
+	exit 0 ;# we do not interrupt rebasing detached HEAD
+fi
+
+case "$topic" in
+refs/heads/??/*)
+	;;
+*)
+	exit 0 ;# we do not interrupt others.
+	;;
+esac
+
+# Now we are dealing with a topic branch being rebased
+# on top of master.  Is it OK to rebase it?
+
+# Does the topic really exist?
+git show-ref -q "$topic" || {
+	echo >&2 "No such branch $topic"
+	exit 1
+}
+
+# Is topic fully merged to master?
+not_in_master=`git rev-list --pretty=oneline ^master "$topic"`
+if test -z "$not_in_master"
+then
+	echo >&2 "$topic is fully merged to master; better remove it."
+	exit 1 ;# we could allow it, but there is no point.
+fi
+
+# Is topic ever merged to next?  If so you should not be rebasing it.
+only_next_1=`git rev-list ^master "^$topic" ${publish} | sort`
+only_next_2=`git rev-list ^master           ${publish} | sort`
+if test "$only_next_1" = "$only_next_2"
+then
+	not_in_topic=`git rev-list "^$topic" master`
+	if test -z "$not_in_topic"
+	then
+		echo >&2 "$topic is already up to date with master"
+		exit 1 ;# we could allow it, but there is no point.
+	else
+		exit 0
+	fi
+else
+	not_in_next=`git rev-list --pretty=oneline ^${publish} "$topic"`
+	/usr/bin/perl -e '
+		my $topic = $ARGV[0];
+		my $msg = "* $topic has commits already merged to public branch:\n";
+		my (%not_in_next) = map {
+			/^([0-9a-f]+) /;
+			($1 => 1);
+		} split(/\n/, $ARGV[1]);
+		for my $elem (map {
+				/^([0-9a-f]+) (.*)$/;
+				[$1 => $2];
+			} split(/\n/, $ARGV[2])) {
+			if (!exists $not_in_next{$elem->[0]}) {
+				if ($msg) {
+					print STDERR $msg;
+					undef $msg;
+				}
+				print STDERR " $elem->[1]\n";
+			}
+		}
+	' "$topic" "$not_in_next" "$not_in_master"
+	exit 1
+fi
+
+<<\DOC_END
+
+This sample hook safeguards topic branches that have been
+published from being rewound.
+
+The workflow assumed here is:
+
+ * Once a topic branch forks from "master", "master" is never
+   merged into it again (either directly or indirectly).
+
+ * Once a topic branch is fully cooked and merged into "master",
+   it is deleted.  If you need to build on top of it to correct
+   earlier mistakes, a new topic branch is created by forking at
+   the tip of the "master".  This is not strictly necessary, but
+   it makes it easier to keep your history simple.
+
+ * Whenever you need to test or publish your changes to topic
+   branches, merge them into "next" branch.
+
+The script, being an example, hardcodes the publish branch name
+to be "next", but it is trivial to make it configurable via
+$GIT_DIR/config mechanism.
+
+With this workflow, you would want to know:
+
+(1) ... if a topic branch has ever been merged to "next".  Young
+    topic branches can have stupid mistakes you would rather
+    clean up before publishing, and things that have not been
+    merged into other branches can be easily rebased without
+    affecting other people.  But once it is published, you would
+    not want to rewind it.
+
+(2) ... if a topic branch has been fully merged to "master".
+    Then you can delete it.  More importantly, you should not
+    build on top of it -- other people may already want to
+    change things related to the topic as patches against your
+    "master", so if you need further changes, it is better to
+    fork the topic (perhaps with the same name) afresh from the
+    tip of "master".
+
+Let's look at this example:
+
+		   o---o---o---o---o---o---o---o---o---o "next"
+		  /       /           /           /
+		 /   a---a---b A     /           /
+		/   /               /           /
+	       /   /   c---c---c---c B         /
+	      /   /   /             \         /
+	     /   /   /   b---b C     \       /
+	    /   /   /   /             \     /
+    ---o---o---o---o---o---o---o---o---o---o---o "master"
+
+
+A, B and C are topic branches.
+
+ * A has one fix since it was merged up to "next".
+
+ * B has finished.  It has been fully merged up to "master" and "next",
+   and is ready to be deleted.
+
+ * C has not merged to "next" at all.
+
+We would want to allow C to be rebased, refuse A, and encourage
+B to be deleted.
+
+To compute (1):
+
+	git rev-list ^master ^topic next
+	git rev-list ^master        next
+
+	if these match, topic has not merged in next at all.
+
+To compute (2):
+
+	git rev-list master..topic
+
+	if this is empty, it is fully merged to "master".
+
+DOC_END
+```
+
+### .git/hooks/pre-receive.sample
+
+```text
+#!/bin/sh
+#
+# An example hook script to make use of push options.
+# The example simply echoes all push options that start with 'echoback='
+# and rejects all pushes when the "reject" push option is used.
+#
+# To enable this hook, rename this file to "pre-receive".
+
+if test -n "$GIT_PUSH_OPTION_COUNT"
+then
+	i=0
+	while test "$i" -lt "$GIT_PUSH_OPTION_COUNT"
+	do
+		eval "value=\$GIT_PUSH_OPTION_$i"
+		case "$value" in
+		echoback=*)
+			echo "echo from the pre-receive-hook: ${value#*=}" >&2
+			;;
+		reject)
+			exit 1
+		esac
+		i=$((i + 1))
+	done
+fi
+```
+
+### .git/hooks/prepare-commit-msg.sample
+
+```text
+#!/bin/sh
+#
+# An example hook script to prepare the commit log message.
+# Called by "git commit" with the name of the file that has the
+# commit message, followed by the description of the commit
+# message's source.  The hook's purpose is to edit the commit
+# message file.  If the hook fails with a non-zero status,
+# the commit is aborted.
+#
+# To enable this hook, rename this file to "prepare-commit-msg".
+
+# This hook includes three examples. The first one removes the
+# "# Please enter the commit message..." help message.
+#
+# The second includes the output of "git diff --name-status -r"
+# into the message, just before the "git status" output.  It is
+# commented because it doesn't cope with --amend or with squashed
+# commits.
+#
+# The third example adds a Signed-off-by line to the message, that can
+# still be edited.  This is rarely a good idea.
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+SHA1=$3
+
+/usr/bin/perl -i.bak -ne 'print unless(m/^. Please enter the commit message/..m/^#$/)' "$COMMIT_MSG_FILE"
+
+# case "$COMMIT_SOURCE,$SHA1" in
+#  ,|template,)
+#    /usr/bin/perl -i.bak -pe '
+#       print "\n" . `git diff --cached --name-status -r`
+# 	 if /^#/ && $first++ == 0' "$COMMIT_MSG_FILE" ;;
+#  *) ;;
+# esac
+
+# SOB=$(git var GIT_COMMITTER_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
+# git interpret-trailers --in-place --trailer "$SOB" "$COMMIT_MSG_FILE"
+# if test -z "$COMMIT_SOURCE"
+# then
+#   /usr/bin/perl -i.bak -pe 'print "\n" if !$first_line++' "$COMMIT_MSG_FILE"
+# fi
+```
+
+### .git/hooks/push-to-checkout.sample
+
+```text
+#!/bin/sh
+
+# An example hook script to update a checked-out tree on a git push.
+#
+# This hook is invoked by git-receive-pack(1) when it reacts to git
+# push and updates reference(s) in its repository, and when the push
+# tries to update the branch that is currently checked out and the
+# receive.denyCurrentBranch configuration variable is set to
+# updateInstead.
+#
+# By default, such a push is refused if the working tree and the index
+# of the remote repository has any difference from the currently
+# checked out commit; when both the working tree and the index match
+# the current commit, they are updated to match the newly pushed tip
+# of the branch. This hook is to be used to override the default
+# behaviour; however the code below reimplements the default behaviour
+# as a starting point for convenient modification.
+#
+# The hook receives the commit with which the tip of the current
+# branch is going to be updated:
+commit=$1
+
+# It can exit with a non-zero status to refuse the push (when it does
+# so, it must not modify the index or the working tree).
+die () {
+	echo >&2 "$*"
+	exit 1
+}
+
+# Or it can make any necessary changes to the working tree and to the
+# index to bring them to the desired state when the tip of the current
+# branch is updated to the new commit, and exit with a zero status.
+#
+# For example, the hook can simply run git read-tree -u -m HEAD "$1"
+# in order to emulate git fetch that is run in the reverse direction
+# with git push, as the two-tree form of git read-tree -u -m is
+# essentially the same as git switch or git checkout that switches
+# branches while keeping the local changes in the working tree that do
+# not interfere with the difference between the branches.
+
+# The below is a more-or-less exact translation to shell of the C code
+# for the default behaviour for git's push-to-checkout hook defined in
+# the push_to_deploy() function in builtin/receive-pack.c.
+#
+# Note that the hook will be executed from the repository directory,
+# not from the working tree, so if you want to perform operations on
+# the working tree, you will have to adapt your code accordingly, e.g.
+# by adding "cd .." or using relative paths.
+
+if ! git update-index -q --ignore-submodules --refresh
+then
+	die "Up-to-date check failed"
+fi
+
+if ! git diff-files --quiet --ignore-submodules --
+then
+	die "Working directory has unstaged changes"
+fi
+
+# This is a rough translation of:
+#
+#   head_has_history() ? "HEAD" : EMPTY_TREE_SHA1_HEX
+if git cat-file -e HEAD 2>/dev/null
+then
+	head=HEAD
+else
+	head=$(git hash-object -t tree --stdin </dev/null)
+fi
+
+if ! git diff-index --quiet --cached --ignore-submodules $head --
+then
+	die "Working directory has staged changes"
+fi
+
+if ! git read-tree -u -m "$commit"
+then
+	die "Could not update working tree to new HEAD"
+fi
+```
+
+### .git/hooks/update.sample
+
+```text
+#!/bin/sh
+#
+# An example hook script to block unannotated tags from entering.
+# Called by "git receive-pack" with arguments: refname sha1-old sha1-new
+#
+# To enable this hook, rename this file to "update".
+#
+# Config
+# ------
+# hooks.allowunannotated
+#   This boolean sets whether unannotated tags will be allowed into the
+#   repository.  By default they won't be.
+# hooks.allowdeletetag
+#   This boolean sets whether deleting tags will be allowed in the
+#   repository.  By default they won't be.
+# hooks.allowmodifytag
+#   This boolean sets whether a tag may be modified after creation. By default
+#   it won't be.
+# hooks.allowdeletebranch
+#   This boolean sets whether deleting branches will be allowed in the
+#   repository.  By default they won't be.
+# hooks.denycreatebranch
+#   This boolean sets whether remotely creating branches will be denied
+#   in the repository.  By default this is allowed.
+#
+
+# --- Command line
+refname="$1"
+oldrev="$2"
+newrev="$3"
+
+# --- Safety check
+if [ -z "$GIT_DIR" ]; then
+	echo "Don't run this script from the command line." >&2
+	echo " (if you want, you could supply GIT_DIR then run" >&2
+	echo "  $0 <ref> <oldrev> <newrev>)" >&2
+	exit 1
+fi
+
+if [ -z "$refname" -o -z "$oldrev" -o -z "$newrev" ]; then
+	echo "usage: $0 <ref> <oldrev> <newrev>" >&2
+	exit 1
+fi
+
+# --- Config
+allowunannotated=$(git config --type=bool hooks.allowunannotated)
+allowdeletebranch=$(git config --type=bool hooks.allowdeletebranch)
+denycreatebranch=$(git config --type=bool hooks.denycreatebranch)
+allowdeletetag=$(git config --type=bool hooks.allowdeletetag)
+allowmodifytag=$(git config --type=bool hooks.allowmodifytag)
+
+# check for no description
+projectdesc=$(sed -e '1q' "$GIT_DIR/description")
+case "$projectdesc" in
+"Unnamed repository"* | "")
+	echo "*** Project description file hasn't been set" >&2
+	exit 1
+	;;
+esac
+
+# --- Check types
+# if $newrev is 0000...0000, it's a commit to delete a ref.
+zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
+if [ "$newrev" = "$zero" ]; then
+	newrev_type=delete
+else
+	newrev_type=$(git cat-file -t $newrev)
+fi
+
+case "$refname","$newrev_type" in
+	refs/tags/*,commit)
+		# un-annotated tag
+		short_refname=${refname##refs/tags/}
+		if [ "$allowunannotated" != "true" ]; then
+			echo "*** The un-annotated tag, $short_refname, is not allowed in this repository" >&2
+			echo "*** Use 'git tag [ -a | -s ]' for tags you want to propagate." >&2
+			exit 1
+		fi
+		;;
+	refs/tags/*,delete)
+		# delete tag
+		if [ "$allowdeletetag" != "true" ]; then
+			echo "*** Deleting a tag is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	refs/tags/*,tag)
+		# annotated tag
+		if [ "$allowmodifytag" != "true" ] && git rev-parse $refname > /dev/null 2>&1
+		then
+			echo "*** Tag '$refname' already exists." >&2
+			echo "*** Modifying a tag is not allowed in this repository." >&2
+			exit 1
+		fi
+		;;
+	refs/heads/*,commit)
+		# branch
+		if [ "$oldrev" = "$zero" -a "$denycreatebranch" = "true" ]; then
+			echo "*** Creating a branch is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	refs/heads/*,delete)
+		# delete branch
+		if [ "$allowdeletebranch" != "true" ]; then
+			echo "*** Deleting a branch is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	refs/remotes/*,commit)
+		# tracking branch
+		;;
+	refs/remotes/*,delete)
+		# delete tracking branch
+		if [ "$allowdeletebranch" != "true" ]; then
+			echo "*** Deleting a tracking branch is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	*)
+		# Anything else (is there anything else?)
+		echo "*** Update hook: unknown type of update to ref $refname of type $newrev_type" >&2
+		exit 1
+		;;
+esac
+
+# --- Finished
+exit 0
+```
+
+### .git/info/exclude
+
+```text
+# git ls-files --others --exclude-from=.git/info/exclude
+# Lines that start with '#' are comments.
+# For a project mostly in C, the following would be a good set of
+# exclude patterns (uncomment them if you want to use them):
+# *.[oa]
+# *~
+```
+
+### .git/logs/HEAD
+
+```text
+0000000000000000000000000000000000000000 8b14c7f4bd5a7e6d1e487b12ac1d2b587486f55f luca <lucabottero99@gmail.com> 1752610103 +0200	clone: from github.com:luca-bottero/repo-to-llm.git
+8b14c7f4bd5a7e6d1e487b12ac1d2b587486f55f 4a0dbeed328efb923cf05f21bb5735baec73ea53 luca <lucabottero99@gmail.com> 1752612825 +0200	commit: slight refactoring of the code and small bugs fix
+4a0dbeed328efb923cf05f21bb5735baec73ea53 48ac58224f136a227a8fca16bb10991793c9b659 luca <lucabottero99@gmail.com> 1752737080 +0200	pull: Fast-forward
+```
+
+### .git/logs/refs/heads/main
+
+```text
+0000000000000000000000000000000000000000 8b14c7f4bd5a7e6d1e487b12ac1d2b587486f55f luca <lucabottero99@gmail.com> 1752610103 +0200	clone: from github.com:luca-bottero/repo-to-llm.git
+8b14c7f4bd5a7e6d1e487b12ac1d2b587486f55f 4a0dbeed328efb923cf05f21bb5735baec73ea53 luca <lucabottero99@gmail.com> 1752612825 +0200	commit: slight refactoring of the code and small bugs fix
+4a0dbeed328efb923cf05f21bb5735baec73ea53 48ac58224f136a227a8fca16bb10991793c9b659 luca <lucabottero99@gmail.com> 1752737080 +0200	pull: Fast-forward
+```
+
+### .git/logs/refs/remotes/origin/HEAD
+
+```text
+0000000000000000000000000000000000000000 8b14c7f4bd5a7e6d1e487b12ac1d2b587486f55f luca <lucabottero99@gmail.com> 1752610103 +0200	clone: from github.com:luca-bottero/repo-to-llm.git
+```
+
+### .git/logs/refs/remotes/origin/custom-filtering
+
+```text
+0000000000000000000000000000000000000000 9788209b7d6a6bef940ac18669a2e2e16ee229c1 luca <lucabottero99@gmail.com> 1752737080 +0200	pull: storing head
+```
+
+### .git/logs/refs/remotes/origin/main
+
+```text
+8b14c7f4bd5a7e6d1e487b12ac1d2b587486f55f 4a0dbeed328efb923cf05f21bb5735baec73ea53 luca <lucabottero99@gmail.com> 1752612830 +0200	update by push
+4a0dbeed328efb923cf05f21bb5735baec73ea53 48ac58224f136a227a8fca16bb10991793c9b659 luca <lucabottero99@gmail.com> 1752737080 +0200	pull: fast-forward
+```
+
+### .git/objects/38/d08310f5d034fe01ff95245754864be0a6baba
+
+```text
+[Error reading file: 'utf-8' codec can't decode byte 0x9d in position 2: invalid start byte]
+```
+
+### .git/objects/45/24bf3919a4397c93f9e9c997f71a5ff4691913
+
+```text
+[Error reading file: 'utf-8' codec can't decode byte 0x9d in position 2: invalid start byte]
+```
+
+### .git/objects/4a/0bbd44f3e8990ec948f77f23ddeae63354473a
+
+```text
+[Error reading file: 'utf-8' codec can't decode byte 0xd4 in position 6: invalid continuation byte]
+```
+
+### .git/objects/4a/0dbeed328efb923cf05f21bb5735baec73ea53
+
+```text
+[Error reading file: 'utf-8' codec can't decode byte 0x95 in position 2: invalid start byte]
+```
+
+### .git/objects/4e/06b183968f8487969761128dd0d69a5e87cc4c
+
+```text
+[Error reading file: 'utf-8' codec can't decode byte 0xbd in position 2: invalid start byte]
+```
+
+### .git/objects/6b/542bbd102ec036646dbab413b302b6bcecfecc
+
+```text
+[Error reading file: 'utf-8' codec can't decode byte 0xcb in position 4: invalid continuation byte]
+```
+
+### .git/objects/84/557f8f1b139cc509c9383b8670c3a62f7bb714
+
+```text
+[Error reading file: 'utf-8' codec can't decode byte 0x9d in position 2: invalid start byte]
+```
+
+### .git/objects/97/88209b7d6a6bef940ac18669a2e2e16ee229c1
+
+```text
+[Error reading file: 'utf-8' codec can't decode byte 0x9d in position 2: invalid start byte]
+```
+
+### .git/objects/b3/6f07d6b0257d1abee62a94ca36bfbef9d8962f
+
+```text
+[Error reading file: 'utf-8' codec can't decode byte 0xdb in position 4: invalid continuation byte]
+```
+
+### .git/objects/ed/dfc83d9beb6297afd3be6e30618bb9fc79181c
+
+```text
+[Error reading file: 'utf-8' codec can't decode byte 0x95 in position 2: invalid start byte]
+```
+
+### .git/packed-refs
+
+```text
+# pack-refs with: peeled fully-peeled sorted 
+8b14c7f4bd5a7e6d1e487b12ac1d2b587486f55f refs/remotes/origin/main
+```
+
+### .git/refs/heads/main
+
+```text
+48ac58224f136a227a8fca16bb10991793c9b659
+```
+
+### .git/refs/remotes/origin/HEAD
+
+```text
+ref: refs/remotes/origin/main
+```
+
+### .git/refs/remotes/origin/custom-filtering
+
+```text
+9788209b7d6a6bef940ac18669a2e2e16ee229c1
+```
+
+### .git/refs/remotes/origin/main
+
+```text
+48ac58224f136a227a8fca16bb10991793c9b659
+```
+
+### .gitignore
+
+```text
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[codz]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py.cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+#   For a library or package, you might want to ignore these files since the code is
+#   intended to run in multiple environments; otherwise, check them in:
+# .python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# UV
+#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#uv.lock
+
+# poetry
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+#poetry.lock
+#poetry.toml
+
+# pdm
+#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
+#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
+#pdm.lock
+#pdm.toml
+.pdm-python
+.pdm-build/
+
+# pixi
+#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
+#pixi.lock
+#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
+#   in the .venv directory. It is recommended not to include this directory in version control.
+.pixi
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#  and can be added to the global gitignore or merged into this file.  For a more nuclear
+#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
+#.idea/
+
+# Abstra
+# Abstra is an AI-powered process automation framework.
+# Ignore directories containing user credentials, local state, and settings.
+# Learn more at https://abstra.io/docs
+.abstra/
+
+# Visual Studio Code
+#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
+#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#  you could uncomment the following to ignore the entire vscode folder
+# .vscode/
+
+# Ruff stuff:
+.ruff_cache/
+
+# PyPI configuration file
+.pypirc
+
+# Cursor
+#  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
+#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
+#  refer to https://docs.cursor.com/context/ignore-files
+.cursorignore
+.cursorindexingignore
+
+# Marimo
+marimo/_static/
+marimo/_lsp/
+__marimo__/
+```
+
+### LICENSE
+
+```text
+MIT License
+
+Copyright (c) 2025 Luca Bottero
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### README.md
+
+```text
+# repo-to-llm
+
+**Convert a code repository into a clean, LLM-friendly Markdown report.**  
+Includes a directory tree and source code contents, with filtering for size, binary files, and `.gitignore`.
+
+## Features
+
+- ✅ CLI interface
+- ✅ `.gitignore` and glob-based exclusions
+- ✅ File size filtering
+- ✅ Language-aware syntax blocks (e.g. `python`, `yaml`, etc.)
+- ✅ Directory tree generation (optional)
+
+## Installation
+
+```bash
+pip install repo-to-llm
+````
+
+## Usage
+
+```bash
+repo-to-llm /path/to/repo > output.md
+```
+
+### Options
+
+```bash
+--output OUTPUT           Write to a file instead of stdout
+--print                   Print to stdout (default)
+--max-bytes 300kb         Max file size to include (default: 500000 bytes)
+--exclude-tree            Skip the directory tree section
+--exclude-patterns "*.log" "docs/*"   Glob patterns to exclude
+--verbose                 Enable debug output
+```
+
+### Example
+
+```bash
+repo-to-llm my-project --exclude-patterns "*.log" "tests/*" --max-bytes 300kb > project.md
+```
+
+## Configuration
+
+You can override defaults in `~/.repo_to_llm/config.yml`.
+
+```yaml
+max_bytes: 1000000
+excluded_patterns:
+  - ".git/*"
+  - "__pycache__/*"
+extension_mapping:
+  .ext: my_extension
+  .ext2: my_second_extension
+```
+
+## Contributing
+
+Contributions are welcome. Please open an issue or PR on GitHub.
+
+## License
+
+MIT License. See [LICENSE](./LICENSE).
+```
+
+### pyproject.toml
+
+```text
+[project]
+name = "repo-to-llm"
+version = "0.1.1"
+description = "CLI tool to convert a code repository into LLM-friendly markdown"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [{ name = "Luca Bottero", email = "lucabottero99@gmail.com" }]
+keywords = ["cli", "llm", "markdown", "codebase", "repo", "repository"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "gitignore-parser",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/luca-bottero/repo-to-llm"
+"Repository" = "https://github.com/luca-bottero/repo-to-llm"
+"Bug Tracker" = "https://github.com/luca-bottero/repo-to-llm/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+repo-to-llm = "repo_to_llm.cli:main"
+
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+```
+
+### src/repo_to_llm/__init__.py
+
+```text
+
+```
+
+### src/repo_to_llm/cli.py
+
+```text
+import argparse
+import sys
+from pathlib import Path
+import logging
+import re
+
+from repo_to_llm.core import generate_report
+from repo_to_llm.utils import parse_size
+from repo_to_llm.config import config
+
+logger = logging.getLogger("repo-to-llm")
+
+def main():
+    parser = argparse.ArgumentParser(description="Dump directory tree and file contents for LLM input.")
+    parser.add_argument('input_dir', type=Path, help="Input directory")
+    parser.add_argument('--output', type=Path, help="Output file (if omitted, prints to stdout)")
+    parser.add_argument('--print', action='store_true', help="Print to stdout (default behavior)")
+    parser.add_argument('--max-bytes', type=parse_size, default=config.max_bytes, 
+                        help="Maximum file size to include (e.g. 300kb, 1mb). Default is 500000 bytes.")
+    parser.add_argument('--verbose', action='store_true', help="Enable debug output")
+    parser.add_argument('--exclude-tree', action='store_true', help="Exclude directory tree structure from report")
+    parser.add_argument(
+        "--exclude-patterns",
+        type=str,
+        nargs="*",
+        help="Space-separated glob patterns to exclude files or directories, e.g. --exclude-patterns '*.py' 'test/*'"
+    )
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    if not args.input_dir.is_dir():
+        logger.error(f"{args.input_dir} is not a directory")
+        sys.exit(1)
+
+    exclude_patterns = args.exclude_patterns if args.exclude_patterns else []
+    logger.debug(f"Excluding patterns: {exclude_patterns}")
+
+    report = generate_report(
+        args.input_dir,
+        Path(__file__).resolve(),
+        max_bytes=args.max_bytes,
+        exclude_tree=args.exclude_tree,
+        exclude_patterns=exclude_patterns
+    )
+
+    if args.output:
+        output_path = args.output.with_suffix(args.output.suffix)
+        output_path.write_text(report, encoding='utf-8')
+        logger.info(f"Wrote output to {output_path}")
+    else:
+        print(report)
+```
+
+### src/repo_to_llm/config.py
+
+```text
+import yaml
+from pathlib import Path
+
+DEFAULT_CONFIG_PATH = Path(__file__).parent / "defaults.yml"
+USER_CONFIG_PATH = Path.home() / ".repo_to_llm" / "config.yml"
+
+class Config:
+    def __init__(self):
+        self._default = self._load_yaml(DEFAULT_CONFIG_PATH)
+        self._user = self._load_yaml(USER_CONFIG_PATH)
+
+    def _load_yaml(self, path):
+        if not path.exists():
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+
+    def _get(self, key, default=None):
+        return self._user.get(key, self._default.get(key, default))
+
+    @property
+    def max_bytes(self) -> int:
+        return self._get("max_bytes", 500_000)
+
+    @property
+    def extension_mapping(self) -> dict:
+        return self._get("extension_mapping", {})
+
+    @property
+    def excluded_patterns(self) -> list:
+        return self._get("excluded_patterns", [])
+
+
+config = Config()
+```
+
+### src/repo_to_llm/core.py
+
+```text
+from pathlib import Path
+from gitignore_parser import parse_gitignore
+
+from repo_to_llm.pattern_matching import generate_tree, collect_files, guess_language
+
+def generate_report(
+    input_dir: Path,
+    script_path: Path,
+    max_bytes: int,
+    exclude_tree: bool = False,
+    exclude_patterns: set | None = None
+) -> str:
+    gitignore_path = input_dir / '.gitignore'
+    ignore_matcher = parse_gitignore(gitignore_path) if gitignore_path.exists() else lambda path: False
+
+    output = []
+
+    if not exclude_tree:
+        output.append("## Directory Tree\n")
+        output.append("```")
+        output.append(generate_tree(input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns))
+        output.append("```\n\n")
+
+    output.append("## File Contents\n")
+    files = collect_files(input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns)
+
+    for file in sorted(files):
+        rel_path = file.relative_to(input_dir)
+        lang = guess_language(file)
+        output.append(f"### {rel_path}\n")
+        output.append(f"```{lang}")
+        try:
+            content = file.read_text(encoding='utf-8')
+        except Exception as e:
+            content = f"[Error reading file: {e}]"
+        output.append(content.rstrip())
+        output.append("```")
+        output.append("")
+
+    return '\n'.join(output)
+```
+
+### src/repo_to_llm/defaults.yml
+
+```text
+max_bytes: 1_000_000
+
+extension_mapping:
+  .py: python
+  .js: javascript
+  .ts: typescript
+  .java: java
+  .cpp: cpp
+  .c: c
+  .html: html
+  .css: css
+  .json: json
+  .md: markdown
+  .sh: bash
+  .yml: yaml
+  .yaml: yaml
+  .txt: text
+  .jinja: jinja
+
+excluded_patterns:
+  - ".git/*"
+  - ".*"
+  - "*.log"
+  - "*.log.*"
+  - "*.ipynb"
+```
+
+### src/repo_to_llm/pattern_matching.py
+
+```text
+import os
+import fnmatch
+from pathlib import Path
+import logging
+
+from repo_to_llm.config import config
+
+logger = logging.getLogger("repo-to-llm")
+
+def is_text_file(path: Path, blocksize: int = 512) -> bool:
+    try:
+        with open(path, 'rb') as f:
+            block = f.read(blocksize)
+        if b'\0' in block:
+            return False
+        return True
+    except Exception as e:
+        logger.debug(f"Error reading {path}: {e}")
+        return False
+
+def should_exclude(path: Path, input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_patterns: set | None = None) -> bool:
+    if path.resolve() == script_path.resolve():
+        return True
+
+    relative_str = str(path.relative_to(input_dir))
+
+    if ignore_matcher(str(path)):
+        logger.debug(f"Skipping {path} because of inclusion in .gitignore")
+        return True
+
+    for pattern in config.excluded_patterns:
+        if fnmatch.fnmatch(relative_str, pattern):
+            logger.debug(f"Skipping {path} because in config.excluded_patterns")
+            return True
+
+    if exclude_patterns:
+        for pattern in exclude_patterns:
+            if fnmatch.fnmatch(relative_str, pattern):
+                logger.debug(f"Excluding {relative_str} due to user pattern: {pattern}")
+                return True
+
+    if path.stat().st_size > max_bytes:
+        logger.debug(f"Skipping {path} due to size > {max_bytes} bytes")
+        return True
+
+    if not is_text_file(path):
+        logger.debug(f"Skipping {path} due to binary type")
+        return True
+
+    return False
+
+def collect_files(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_patterns: set | None = None) -> list:
+    files = []
+    for path in input_dir.rglob('*'):
+        try:
+            if path.is_file() and not should_exclude(path, input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns):
+                files.append(path)
+        except Exception as e:
+            logger.warning(f"Error processing {path}: {e}")
+    return files
+
+def generate_tree(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_patterns: set | None = None) -> str:
+    output = []
+
+    def walk_dir(path: Path, prefix: str = '', is_last: bool = True):
+        # Print the directory name
+        connector = '└── ' if is_last else '├── '
+        if prefix == '':
+            output.append(f"{path.name}/")
+        else:
+            output.append(f"{prefix}{connector}{path.name}/")
+
+        # List and filter directories
+        try:
+            entries = [e for e in path.iterdir() if not e.name.startswith('.') and not ignore_matcher(str(e))]
+        except Exception as e:
+            # Can't list directory contents
+            output.append(f"{prefix}    [Error reading directory: {e}]")
+            return
+
+        dirs = sorted([e for e in entries if e.is_dir()])
+        files = sorted([e for e in entries if e.is_file() and not should_exclude(e, input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns)])
+
+        total_entries = len(dirs) + len(files)
+
+        for i, d in enumerate(dirs):
+            last = (i == total_entries - 1) if len(files) == 0 else False
+            # For prefix, add '│   ' if not last directory, else '    '
+            new_prefix = prefix + ('    ' if is_last else '│   ')
+            walk_dir(d, new_prefix, last)
+
+        for i, f in enumerate(files):
+            last = (i == len(files) - 1)
+            connector = '└── ' if last else '├── '
+            new_prefix = prefix + ('    ' if is_last else '│   ')
+            output.append(f"{new_prefix}{connector}{f.name}")
+
+    walk_dir(input_dir)
+
+    return '\n'.join(output)
+
+def guess_language(path: Path) -> str:
+    ext = path.suffix.lower()
+    return config.extension_mapping.get(ext, 'text')
+```
+
+### src/repo_to_llm/utils.py
+
+```text
+import argparse
+import re
+
+def parse_size(size_str: str) -> int:
+    """Parse size strings like '300kb', '2mb' into bytes."""
+    size_str = size_str.strip().lower()
+    match = re.match(r'^(\d+(?:\.\d+)?)([kmgt]?b)?$', size_str)
+    if not match:
+        raise argparse.ArgumentTypeError(f"Invalid size format: {size_str}")
+    number, unit = match.groups()
+    number = float(number)
+    unit_multipliers = {
+        None: 1,
+        'b': 1,
+        'kb': 10**3,
+        'mb': 10**6,
+        'gb': 10**9,
+        'tb': 10**12,
+    }
+    multiplier = unit_multipliers.get(unit, None)
+    if multiplier is None:
+        raise argparse.ArgumentTypeError(f"Unknown size unit: {unit}")
+    return int(number * multiplier)
+```
+
+### test/__init__.py
+
+```text
+
+```
+
+### test/test_core.py
+
+```text
+import os
+import stat
+import tempfile
+import pytest
+from pathlib import Path
+from unittest.mock import patch
+
+import repo_to_llm.core as core
+
+@pytest.fixture
+def temp_repo(tmp_path):
+    # Setup a sample repo structure
+    (tmp_path / ".gitignore").write_text("ignored_dir/\nignored_file.log\n")
+    (tmp_path / "file1.py").write_text("print('hello')")
+    (tmp_path / "file2.log").write_text("log contents")
+    ignored_dir = tmp_path / "ignored_dir"
+    ignored_dir.mkdir()
+    (ignored_dir / "file3.py").write_text("print('ignore me')")
+    binary_file = tmp_path / "binary.bin"
+    binary_file.write_bytes(b"\x00\x01\x02\x03\x00")  # Contains null byte, treated as binary
+    large_file = tmp_path / "large.txt"
+    large_file.write_text("a" * (core.DEFAULT_MAX_BYTES + 1))
+    yield tmp_path
+
+
+def test_is_text_file(tmp_path):
+    text_file = tmp_path / "text.txt"
+    text_file.write_text("normal text")
+    binary_file = tmp_path / "binary.bin"
+    binary_file.write_bytes(b"\x00\x01\x02\x00")
+
+    assert core.is_text_file(text_file) is True
+    assert core.is_text_file(binary_file) is False
+
+def test_should_exclude(temp_repo):
+    ignore_matcher = core.parse_gitignore(temp_repo / ".gitignore")
+    script_path = Path("/some/script/path.py")  # assume unrelated script path
+    max_bytes = core.DEFAULT_MAX_BYTES
+
+    # Exclude script file itself
+    assert core.should_exclude(script_path, temp_repo, ignore_matcher, script_path, max_bytes)
+
+    # Exclude files matched by gitignore
+    ignored_file = temp_repo / "ignored_file.log"
+    assert core.should_exclude(ignored_file, temp_repo, ignore_matcher, script_path, max_bytes)
+
+    # Exclude files matched by EXCLUDED_PATTERNS (e.g. *.log)
+    log_file = temp_repo / "file2.log"
+    assert core.should_exclude(log_file, temp_repo, ignore_matcher, script_path, max_bytes)
+
+    # Exclude large files
+    large_file = temp_repo / "large.txt"
+    assert core.should_exclude(large_file, temp_repo, ignore_matcher, script_path, max_bytes)
+
+    # Exclude binary files
+    binary_file = temp_repo / "binary.bin"
+    assert core.should_exclude(binary_file, temp_repo, ignore_matcher, script_path, max_bytes)
+
+    # Include normal python file
+    py_file = temp_repo / "file1.py"
+    assert not core.should_exclude(py_file, temp_repo, ignore_matcher, script_path, max_bytes)
+
+def test_collect_files(temp_repo):
+    ignore_matcher = core.parse_gitignore(temp_repo / ".gitignore")
+    script_path = Path("/unrelated/script.py")
+    max_bytes = core.DEFAULT_MAX_BYTES
+
+    files = core.collect_files(temp_repo, ignore_matcher, script_path, max_bytes)
+    # Should include file1.py, exclude others per should_exclude
+    rel_paths = [f.relative_to(temp_repo) for f in files]
+    assert Path("file1.py") in rel_paths
+    assert Path("file2.log") not in rel_paths
+    assert Path("ignored_dir/file3.py") not in rel_paths
+
+def test_generate_tree(temp_repo):
+    ignore_matcher = core.parse_gitignore(temp_repo / ".gitignore")
+    script_path = Path("/unrelated/script.py")  # dummy path for exclusion check
+    max_bytes = core.DEFAULT_MAX_BYTES
+    tree_str = core.generate_tree(temp_repo, ignore_matcher, script_path, max_bytes)
+
+    # Should include top-level files except ignored ones
+    assert "file1.py" in tree_str
+    assert "file2.log" not in tree_str  # ignored by pattern
+    assert "ignored_dir" not in tree_str  # ignored directory
+    # Directory names end with /
+    assert f"{temp_repo.name}/" in tree_str or "./" in tree_str
+
+def test_guess_language():
+    assert core.guess_language(Path("foo.py")) == "python"
+    assert core.guess_language(Path("bar.ts")) == "typescript"
+    assert core.guess_language(Path("README.md")) == "markdown"
+    assert core.guess_language(Path("unknown.ext")) == "text"
+    assert core.guess_language(Path("script.sh")) == "bash"
+
+def test_generate_report(temp_repo, monkeypatch):
+    monkeypatch.setattr(core, "parse_gitignore", lambda p: lambda path: "ignored_file.log" in path)
+    script_path = Path("/some/script.py")
+
+    # Create the error-triggering file
+    error_file = temp_repo / "error.py"
+    error_file.write_text("some content")
+
+    # Save the original unpatched method
+    original_read_text = Path.read_text
+
+    def mock_read_text(self, *args, **kwargs):
+        if self.name == "error.py":
+            raise IOError("Mocked read error")
+        return original_read_text(self, *args, **kwargs)
+
+    with patch("pathlib.Path.read_text", new=mock_read_text):
+        report = core.generate_report(temp_repo, script_path, core.DEFAULT_MAX_BYTES)
+
+        assert "## Directory Tree" in report
+        assert "## File Contents" in report
+        assert "file1.py" in report
+        assert "print('hello')" in report  # This now works as expected
+        assert "error.py" in report
+        assert "[Error reading file: Mocked read error]" in report
+```
