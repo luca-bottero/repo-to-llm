@@ -1,6 +1,6 @@
 [project]
 name = "repo-to-llm"
-version = "0.1.1"
+version = "0.1.2"
 description = "CLI tool to convert a code repository into LLM-friendly markdown"
 readme = "README.md"
 requires-python = ">=3.8"
