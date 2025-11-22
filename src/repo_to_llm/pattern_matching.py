@@ -49,15 +49,28 @@ def should_exclude(path: Path, input_dir: Path, ignore_matcher, script_path: Pat
 
     return False
 
-def collect_files(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_patterns: set | None = None) -> list:
+def collect_files(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int,
+                  exclude_patterns: set | None = None) -> list:
     files = []
-    for path in input_dir.rglob('*'):
-        try:
-            if path.is_file() and not should_exclude(path, input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns):
-                files.append(path)
-        except Exception as e:
-            logger.warning(f"Error processing {path}: {e}")
+
+    for root, dirs, filenames in os.walk(input_dir):
+        root_path = Path(root)
+
+        # Determine which directories to skip BEFORE descending
+        dirs[:] = [
+            d for d in dirs
+            if not should_exclude(root_path / d, input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns)
+        ]
+
+        for filename in filenames:
+            file_path = root_path / filename
+            try:
+                if not should_exclude(file_path, input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns):
+                    files.append(file_path)
+            except Exception as e:
+                logger.warning(f"Error processing {file_path}: {e}")
     return files
+
 
 def generate_tree(input_dir: Path, ignore_matcher, script_path: Path, max_bytes: int, exclude_patterns: set | None = None) -> str:
     output = []
@@ -70,33 +83,37 @@ def generate_tree(input_dir: Path, ignore_matcher, script_path: Path, max_bytes:
         else:
             output.append(f"{prefix}{connector}{path.name}/")
 
-        # List and filter directories
+        # List and filter directory entries (hide dotfiles and .gitignore-matched entries)
         try:
             entries = [e for e in path.iterdir() if not e.name.startswith('.') and not ignore_matcher(str(e))]
         except Exception as e:
-            # Can't list directory contents
             output.append(f"{prefix}    [Error reading directory: {e}]")
             return
 
-        dirs = sorted([e for e in entries if e.is_dir()])
-        files = sorted([e for e in entries if e.is_file() and not should_exclude(e, input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns)])
+        # Filter directories using the same exclusion logic used for files so we do not descend into excluded dirs
+        dirs = sorted(
+            [e for e in entries if e.is_dir() and not should_exclude(e, input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns)]
+        )
 
-        total_entries = len(dirs) + len(files)
+        # Files: apply should_exclude as before
+        files = sorted(
+            [e for e in entries if e.is_file() and not should_exclude(e, input_dir, ignore_matcher, script_path, max_bytes, exclude_patterns)]
+        )
 
+        # Iterate directories first, then files (compute last correctly)
         for i, d in enumerate(dirs):
-            last = (i == total_entries - 1) if len(files) == 0 else False
-            # For prefix, add '│   ' if not last directory, else '    '
+            # A directory is "last" only if it's the last directory AND there are no files
+            last_dir = (i == len(dirs) - 1) and (len(files) == 0)
             new_prefix = prefix + ('    ' if is_last else '│   ')
-            walk_dir(d, new_prefix, last)
+            walk_dir(d, new_prefix, last_dir)
 
         for i, f in enumerate(files):
-            last = (i == len(files) - 1)
-            connector = '└── ' if last else '├── '
+            last_file = (i == len(files) - 1)
+            connector = '└── ' if last_file else '├── '
             new_prefix = prefix + ('    ' if is_last else '│   ')
             output.append(f"{new_prefix}{connector}{f.name}")
 
     walk_dir(input_dir)
-
     return '\n'.join(output)
 
 def guess_language(path: Path) -> str:
